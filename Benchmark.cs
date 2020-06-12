@@ -31,30 +31,26 @@ namespace Benchmark
     [Benchmark(Baseline = true)]
     public UInt32 Baseline()
     {
-      byte[] data = Enumerable.Repeat((byte)0x00, Workers * Data.Length).ToArray();
-      using var stream = new MemoryStream(data, true);
+      using var stream = new MemoryStream();
       for (int i = 0; i < Workers; ++i)
         stream.Write(Data);
-      return hash(data);
+      return hash(stream.ToArray());
     }
 
     [Benchmark]
     public async Task<UInt32> Lock()
     {
-
-      byte[] data = Enumerable.Repeat((byte)0x00, Workers * Data.Length).ToArray();
-      using var stream = new MemoryStream(data, true);
+      using var stream = new MemoryStream();
       object l = new object();
 
       var workers =
         Enumerable
           .Range(1, Workers)
-          .Select(id => Task.Run(() => worker(id, stream)));
-
+          .Select(id => Task.Run(worker));
 
       await Task.WhenAll(workers);
 
-      void worker(int id, Stream stream)
+      void worker()
       {
         lock (l)
         {
@@ -62,44 +58,33 @@ namespace Benchmark
         }
       }
 
-      return hash(data);
+      return hash(stream.ToArray());
     }
 
     [Benchmark]
     public async Task<UInt32> Queue()
     {
+      using var stream = new MemoryStream();
+      var chan = Channel.CreateUnbounded<Action>();
 
-      byte[] data = Enumerable.Repeat((byte)0x00, Workers * Data.Length).ToArray();
-      using var stream = new MemoryStream(data, true);
-      var chan = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions
+      var task = Task.Run(async () =>
       {
-        AllowSynchronousContinuations = true,
-        SingleReader = true,
-        SingleWriter = true
+        await foreach (var task in chan.Reader.ReadAllAsync())
+          task();
       });
 
-      // IEnumerable<Action> workers =
-      //   Enumerable
-      //     .Range(1, Workers)
-      //     .Select(id => () => worker(id, stream) );
-
       for (int i = 1; i <= Workers; ++i)
-        chan.Writer.TryWrite(() => worker(i, stream));
+        chan.Writer.TryWrite(worker);
 
       chan.Writer.TryComplete();
 
+      await task;
+      return hash(stream.ToArray());
 
-      await foreach (var task in chan.Reader.ReadAllAsync())
-        task();
-
-
-      void worker(int id, Stream stream)
+      void worker()
       {
         stream.Write(Data);
       }
-
-
-      return hash(data);
 
     }
 
@@ -107,20 +92,17 @@ namespace Benchmark
     public async Task<UInt32> LockSemaphoreSlim()
     {
 
-      byte[] data = Enumerable.Repeat((byte)0x00, Workers * Data.Length).ToArray();
-      using var stream = new MemoryStream(data, true);
+      using var stream = new MemoryStream();
       var semaphore = new SemaphoreSlim(1, 1);
-
-
 
       var workers =
         Enumerable
           .Range(1, Workers)
-          .Select(id => Task.Run(() => worker(id, stream)));
+          .Select(id => Task.Run(worker));
 
       await Task.WhenAll(workers);
 
-      void worker(int id, Stream stream)
+      void worker()
       {
         try
         {
@@ -133,7 +115,7 @@ namespace Benchmark
         }
       }
 
-      return hash(data);
+      return hash(stream.ToArray());
     }
 
   }
